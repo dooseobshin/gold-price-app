@@ -13,39 +13,80 @@
     input { width:100%; padding:12px; font-size:16px; border-radius:12px; border:1px solid #d1d5db; }
     button { width:100%; padding:12px; font-size:16px; border-radius:12px; border:none; background:#111827; color:#fff; }
     .row { display:grid; gap:10px; }
-    .kpi { display:flex; justify-content:space-between; border-top:1px solid #eee; padding:10px 0; }
+    .kpi { display:flex; justify-content:space-between; border-top:1px solid #eee; padding:10px 0; gap:12px; }
     .kpi:first-child { border-top:none; }
     .t { font-size:12px; color:#6b7280; }
-    .v { font-size:16px; font-weight:700; }
-    .small { font-size:12px; color:#6b7280; line-height:1.35; }
+    .v { font-size:16px; font-weight:700; text-align:right; }
+    .small { font-size:12px; color:#6b7280; line-height:1.4; }
+    .blue { font-size:12px; color:#2563eb; line-height:1.5; }
+    .toggle {
+      display:flex; align-items:center; justify-content:space-between;
+      background:#f9fafb; border:1px solid #e5e7eb; border-radius:12px; padding:10px 12px;
+    }
+    .toggle label { margin:0; font-size:13px; color:#111827; }
+    .toggle input { width:auto; transform:scale(1.2); }
+    .muted { opacity:.6; }
   </style>
 </head>
 <body>
 <div class="wrap">
 
   <div class="card">
-    <h1>국제 금시세 → 할인 → KG 계산 (실시간)</h1>
+    <h1>국제 금시세 → 할인 → KG 계산 (실시간 + 수기)</h1>
+
     <div class="row">
+      <button id="btnLive" onclick="loadLive()">실시간 불러오기</button>
+
+      <div class="toggle">
+        <label for="useManual">수기 입력값으로 계산하기</label>
+        <input id="useManual" type="checkbox" onchange="recalc()">
+      </div>
+
+      <div id="manualBox" class="row muted">
+        <div>
+          <label>국제 금시세 (USD / oz) — 수기 입력</label>
+          <input id="xauManual" value="" inputmode="decimal" placeholder="예: 2050.25">
+        </div>
+        <div>
+          <label>환율 (KRW / USD) — 수기 입력</label>
+          <input id="fxManual" value="" inputmode="decimal" placeholder="예: 1335.50">
+        </div>
+      </div>
+
       <div>
         <label>할인율 (%)</label>
         <input id="discount" value="0" inputmode="decimal">
       </div>
+
       <div>
         <label>중량 (KG)</label>
         <input id="kgInput" value="100" inputmode="decimal">
       </div>
-      <button id="btn" onclick="calc()">실시간 불러와서 계산</button>
+
+      <button onclick="recalc()">계산하기</button>
+
       <div class="small" id="status">대기 중…</div>
+      <div class="small" id="time">-</div>
     </div>
   </div>
 
   <div class="card">
     <div class="kpi"><span class="t">국제 금시세 (USD/oz)</span><span class="v" id="xauUsdOz">-</span></div>
     <div class="kpi"><span class="t">환율 (KRW/USD)</span><span class="v" id="usdKrw">-</span></div>
+
+    <div class="kpi"><span class="t">적용 (원 / g)  ※ (금시세×환율÷31.1035)</span><span class="v" id="krwPerG_base">-</span></div>
+
     <div class="kpi"><span class="t">할인 적용 (원 / g)</span><span class="v" id="krwPerG">-</span></div>
     <div class="kpi"><span class="t">할인 적용 (원 / kg)</span><span class="v" id="krwPerKg">-</span></div>
     <div class="kpi"><span class="t">입력 KG 총 금액</span><span class="v" id="totalPrice">-</span></div>
-    <div class="small" id="time">-</div>
+
+    <div class="blue" style="margin-top:10px;">
+      계산 방법 안내<br>
+      1) 원/g = (국제 금시세 USD/oz × 환율 KRW/USD) ÷ 31.1034768<br>
+      2) 할인 적용 원/g = 원/g × (1 − 할인율/100)<br>
+      3) 원/kg = (할인 적용 원/g) × 1000<br>
+      4) 총금액 = 원/kg × 입력 KG
+    </div>
   </div>
 
 </div>
@@ -65,72 +106,124 @@ async function fetchJSON(url){
   return r.json();
 }
 
-async function loadRates(){
-  // 실시간: Vercel 배포 후에만 동작합니다.
-  const [gold, fx] = await Promise.all([
-    fetchJSON('/api/gold'),
-    fetchJSON('/api/fx'),
-  ]);
-  return { xau: gold.price, usdkrw: fx.rate };
-}
-
-async function calc(){
+async function loadLive(){
   const status = document.getElementById('status');
-  const btn = document.getElementById('btn');
-
-  const d  = parseFloat(document.getElementById('discount').value || "0");
-  const kg = parseFloat(document.getElementById('kgInput').value || "0");
-
+  const btn = document.getElementById('btnLive');
   btn.disabled = true;
   status.textContent = '실시간 시세 불러오는 중…';
 
   try {
-    const { xau, usdkrw } = await loadRates();
+    const [gold, fx] = await Promise.all([
+      fetchJSON('/api/gold'),
+      fetchJSON('/api/fx'),
+    ]);
 
-    // 저장(실패 대비)
+    const xau = gold.price;
+    const usdkrw = fx.rate;
+
+    // 저장
     localStorage.setItem('last_xau', String(xau));
     localStorage.setItem('last_fx', String(usdkrw));
     localStorage.setItem('last_ts', String(Date.now()));
 
-    render(xau, usdkrw, d, kg);
+    // 표시용 저장값 업데이트
+    window.__live = { xau, usdkrw };
+
     status.textContent = '실시간 반영 완료 ✅';
+    document.getElementById('time').textContent = '실시간 갱신: ' + new Date().toLocaleString('ko-KR');
+
+    recalc(); // 현재 모드(수기/실시간)에 맞춰 재계산
   } catch (e) {
-    // 마지막 값으로라도 계산
+    status.textContent = '실시간 호출 실패(네트워크/키/제한). 마지막 저장값이 있으면 그걸로 계산합니다 ⚠️';
+    console.error(e);
+
     const xau = parseFloat(localStorage.getItem('last_xau') || "0");
     const usdkrw = parseFloat(localStorage.getItem('last_fx') || "0");
     const ts = localStorage.getItem('last_ts');
 
     if (xau > 0 && usdkrw > 0) {
-      render(xau, usdkrw, d, kg);
-      status.textContent = '실시간 호출 실패 → 마지막 저장값으로 계산했어요 ⚠️';
+      window.__live = { xau, usdkrw };
       if (ts) document.getElementById('time').textContent =
         '마지막 저장: ' + new Date(parseInt(ts,10)).toLocaleString('ko-KR');
-    } else {
-      status.textContent = '실시간 호출 실패. (아직 Vercel 배포 전이면 정상이에요) ⚠️';
+      recalc();
     }
-    console.error(e);
   } finally {
     btn.disabled = false;
   }
 }
 
-function render(xau, usdkrw, d, kg){
+function getInputs(){
+  const useManual = document.getElementById('useManual').checked;
+
+  const d  = parseFloat(document.getElementById('discount').value || "0");
+  const kg = parseFloat(document.getElementById('kgInput').value || "0");
+
+  // 실시간 값
+  const live = window.__live || {
+    xau: parseFloat(localStorage.getItem('last_xau') || "0"),
+    usdkrw: parseFloat(localStorage.getItem('last_fx') || "0"),
+  };
+
+  // 수기 값
+  const xauM = parseFloat(document.getElementById('xauManual').value || "0");
+  const fxM  = parseFloat(document.getElementById('fxManual').value || "0");
+
+  const xau = useManual ? xauM : live.xau;
+  const usdkrw = useManual ? fxM : live.usdkrw;
+
+  return { useManual, d, kg, xau, usdkrw, live, xauM, fxM };
+}
+
+function recalc(){
+  const status = document.getElementById('status');
+
+  const manualBox = document.getElementById('manualBox');
+  const useManual = document.getElementById('useManual').checked;
+
+  manualBox.classList.toggle('muted', !useManual);
+
+  const { d, kg, xau, usdkrw } = getInputs();
+
+  if (!xau || !usdkrw) {
+    status.textContent = useManual
+      ? '수기 입력값(국제금시세/환율)을 먼저 넣어주세요.'
+      : '실시간 값을 먼저 불러오세요. (또는 저장값이 없어요)';
+    return;
+  }
+
+  // 표시
   document.getElementById('xauUsdOz').textContent = fmtNum(xau, 2);
   document.getElementById('usdKrw').textContent = fmtNum(usdkrw, 2);
 
-  const krwPerG_raw = (xau * usdkrw) / OZ_TO_G;
-  const discountedG = krwPerG_raw * (1 - d/100);
+  const baseKrwPerG = (xau * usdkrw) / OZ_TO_G;
+  document.getElementById('krwPerG_base').textContent = won(baseKrwPerG);
+
+  const discountedG = baseKrwPerG * (1 - d/100);
   const perKg = discountedG * 1000;
   const total = perKg * kg;
 
   document.getElementById('krwPerG').textContent = won(discountedG);
   document.getElementById('krwPerKg').textContent = won(perKg);
   document.getElementById('totalPrice').textContent = won(total);
-  document.getElementById('time').textContent = '계산 시각: ' + new Date().toLocaleString('ko-KR');
+
+  status.textContent = useManual ? '수기 입력값 기준으로 계산 완료 ✅' : '실시간(또는 저장값) 기준으로 계산 완료 ✅';
+
+  // 계산 시각 표시(수기/실시간 상관없이)
+  const nowStr = new Date().toLocaleString('ko-KR');
+  const timeEl = document.getElementById('time');
+  if (!timeEl.textContent || timeEl.textContent === '-') {
+    timeEl.textContent = '계산 시각: ' + nowStr;
+  }
 }
 
-// 첫 로드 때 자동 계산 시도
-calc();
+// 첫 로드: 저장값으로라도 계산 가능하게
+window.__live = {
+  xau: parseFloat(localStorage.getItem('last_xau') || "0"),
+  usdkrw: parseFloat(localStorage.getItem('last_fx') || "0"),
+};
+
+// 자동 표시
+recalc();
 </script>
 </body>
 </html>
